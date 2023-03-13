@@ -100,7 +100,7 @@ class Game_Manager(QMainWindow):
         self.train_yaml = None
         self.predict_weight = None
         self.art_config_filepath = None
-        
+
         args = get_option(self.game_time,
                           self.mode,
                           self.drop_interval,
@@ -132,19 +132,19 @@ class Game_Manager(QMainWindow):
             self.user_name = args.user_name
         if args.ShapeListMax > 0:
             self.ShapeListMax = args.ShapeListMax
-        
+
         if args.BlockNumMax > 0:
             self.BlockNumMax = args.BlockNumMax
         if args.train_yaml.endswith('.yaml'):
 
-            self.train_yaml = args.train_yaml        
+            self.train_yaml = args.train_yaml
         if args.predict_weight != "default":
             self.predict_weight = args.predict_weight
         if args.art_config_filepath.endswith('.json'):
-            self.art_config_filepath = args.art_config_filepath      
-            
+            self.art_config_filepath = args.art_config_filepath
+
         self.initUI()
-        
+
     ###############################################
     # UI 初期化
     ###############################################
@@ -242,7 +242,7 @@ class Game_Manager(QMainWindow):
         BOARD_DATA.clear()
         ## 新しい予告テトリミノ配列作成
         BOARD_DATA.createNewPiece()
-        
+
 
     ###############################################
     # 画面リセット
@@ -313,13 +313,13 @@ class Game_Manager(QMainWindow):
                     # import block_controller_train_sample, it's necessary to install pytorch to use.
                     from machine_learning.block_controller_train_sample import BLOCK_CONTROLLER_TRAIN_SAMPLE as BLOCK_CONTROLLER_TRAIN
                     self.nextMove = BLOCK_CONTROLLER_TRAIN.GetNextMove(nextMove, GameStatus,yaml_file=self.train_yaml,weight=self.predict_weight)
-                    
+
                 elif self.mode == "train_sample2" or self.mode == "predict_sample2":
                     # sample train/predict
                     # import block_controller_train_sample, it's necessary to install pytorch to use.
                     from machine_learning.block_controller_train_sample2 import BLOCK_CONTROLLER_TRAIN_SAMPLE2 as BLOCK_CONTROLLER_TRAIN
                     self.nextMove = BLOCK_CONTROLLER_TRAIN.GetNextMove(nextMove, GameStatus,yaml_file="config/train_sample2.yaml",weight=self.predict_weight)
-                    
+
                 elif self.mode == "train" or self.mode == "predict":
                     # train/predict
                     # import block_controller_train, it's necessary to install pytorch to use.
@@ -368,11 +368,13 @@ class Game_Manager(QMainWindow):
                 if use_hold_function == "y":
                     isExchangeHoldShape = BOARD_DATA.exchangeholdShape()
                     if isExchangeHoldShape == False:
-                        # if isExchangeHoldShape is False, this means no holdshape exists. 
+                        # if isExchangeHoldShape is False, this means no holdshape exists.
                         # so it needs to return immediately to use new shape.
                         # init nextMove
                         self.nextMove = None
                         return
+
+                # print("shape:{}, x:{}, y_move:{}, y_ope:{}, direct:{}, hold:{}".format(BOARD_DATA.currentShape.shape, next_x, next_y_moveblocknum, y_operation, next_direction, use_hold_function))
 
                 k = 0
                 while BOARD_DATA.currentDirection != next_direction and k < 4:
@@ -423,7 +425,7 @@ class Game_Manager(QMainWindow):
             ##############################
             #
             # check reset field
-            #if BOARD_DATA.currentY < 1: 
+            #if BOARD_DATA.currentY < 1:
             if BOARD_DATA.currentY < 1 or self.nextMove["option"]["force_reset_field"] == True:
                 # if Piece cannot movedown and stack, reset field
                 if self.nextMove["option"]["reset_callback_function_addr"] != None:
@@ -585,7 +587,7 @@ class Game_Manager(QMainWindow):
         status["block_info"]["currentY"] = BOARD_DATA.currentY
         status["block_info"]["currentDirection"] = BOARD_DATA.currentDirection
         ### current shape
-        currentShapeClass, currentShapeIdx, currentShapeRange = BOARD_DATA.getShapeData(0)
+        currentShapeClass, currentShapeIdx, currentShapeRange = BOARD_DATA.getCurrentShapeData()
         status["block_info"]["currentShape"]["class"] = currentShapeClass
         status["block_info"]["currentShape"]["index"] = currentShapeIdx
         status["block_info"]["currentShape"]["direction_range"] = currentShapeRange
@@ -765,7 +767,7 @@ class Game_Manager(QMainWindow):
             return
 
         key = event.key()
-        
+
         # key event handle process.
         # depends on self.mode, it's better to make key config file.
         #  "keyboard" : PC keyboard controller
@@ -774,7 +776,7 @@ class Game_Manager(QMainWindow):
         if key == Qt.Key_P:
             self.pause()
             return
-            
+
         if self.isPaused:
             return
         elif key == Qt.Key_Left:
@@ -859,7 +861,7 @@ class SidePanel(QFrame):
         painter = QPainter(self)
 
         ShapeListLength = BOARD_DATA.getShapeListLength()
-        
+
         # draw next shape
         for i in range(ShapeListLength):
             if i == 0:
@@ -875,7 +877,7 @@ class SidePanel(QFrame):
 
             dy = 1 * self.gridSize
             dx = (self.width() - (maxX - minX) * self.gridSize) / 2
-            
+
             val = ShapeClass.shape
             y_offset = self.NextShapeYOffset * (i - 1) #(self.NextShapeMaxAppear - i)
             # テトリミノを配置すべき座標リストを取得していく
@@ -927,7 +929,7 @@ class Board(QFrame):
         self.line = 0
         self.line_score_stat = [0, 0, 0, 0]
         self.reset_cnt = 0
-        self.start_time = time.time() 
+        self.start_time = time.time()
         ##画面ボードと現テトリミノ情報をクリア
         BOARD_DATA.clear()
         BOARD_DATA.init_randomseed(random_seed_Nextshape)

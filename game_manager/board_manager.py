@@ -103,7 +103,7 @@ class Shape(object):
     def getBoundingOffsets(self, direction):
         # テトリミノ形状を回転した座標を返す
         tmpCoords = self.getRotatedOffsets(direction)
-        # 
+        #
         minX, maxX, minY, maxY = 0, 0, 0, 0
         for x, y in tmpCoords:
             if minX > x:
@@ -272,6 +272,12 @@ class BoardData(object):
         return self.getShapeDataFromShapeClass(ShapeClass)
 
     ################################
+    # current shape オブジェクトを返す
+    ################################
+    def getCurrentShapeData(self):
+        return self.getShapeDataFromShapeClass(self.currentShape)
+
+    ################################
     # ホールド shape オブジェクトを返す
     ################################
     def getholdShapeData(self):
@@ -408,7 +414,7 @@ class BoardData(object):
             removedlines = self.removeFullLines()
             ## 新しい予告テトリミノ配列作成
             self.createNewPiece()
-            
+
         return removedlines, moveDownlines
 
     #####################################
@@ -489,6 +495,7 @@ class BoardData(object):
             return False
         else:
             # if holdShape exists, exchange shapes
+            self.ShapeList[0] = self.holdShape
             self.holdShape,self.currentShape = self.currentShape,self.holdShape
             # init current X,Y,Direction
             minX, maxX, minY, maxY = self.nextShape.getBoundingOffsets(0)

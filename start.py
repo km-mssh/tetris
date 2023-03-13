@@ -18,10 +18,10 @@ def get_option(game_level, game_time, mode, random_seed, drop_interval, resultlo
                            help='Specify mode (keyboard/gamepad/sample/art/train/predict/train_sample/predict_sample/train_sample2/predict_sample2) if necessary')
     argparser.add_argument('-r', '--random_seed', type=int,
                            default=random_seed,
-                           help='Specify random seed if necessary') 
+                           help='Specify random seed if necessary')
     argparser.add_argument('-d', '--drop_interval', type=int,
                            default=drop_interval,
-                           help='Specify drop interval (msec) if necessary') 
+                           help='Specify drop interval (msec) if necessary')
     argparser.add_argument('-f', '--resultlogjson', type=str,
                            default=resultlogjson,
                            help='Specigy result log file path if necessary')
@@ -187,4 +187,6 @@ def start():
     #    p.terminate()
 
 if __name__ == '__main__':
+    import multiprocessing
+    multiprocessing.set_start_method('spawn', True)
     start()
