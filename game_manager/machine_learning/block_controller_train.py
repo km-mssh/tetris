@@ -19,16 +19,16 @@ import shutil
 import glob
 import numpy as np
 import yaml
-from enum import Enum
+from enum import Enum, auto, IntEnum
 import time
 #import subprocess
 
 TARGET_TETRIS_COL = 1            # 4段消しを狙う列番号（1～）
-EPOCH_REWARD_DETAIL_NUM = 15     # 報酬（詳細）の数
+EPOCH_REWARD_DETAIL_NUM = 17     # 報酬（詳細）の数
 I_MINO_LENGTH = 4                # Iミノの長さ
 
-RATE_READY_TETRIS_TARGET_BONUS = 1.2  # 4段消し可能状態が対象列だった場合のボーナス係数
-class Shape(Enum):
+RATE_READY_TETRIS_TARGET_BONUS = 1.5  # 4段消し可能状態が対象列だった場合のボーナス係数
+class eShape(IntEnum):
     shapeNone = 0
     shapeI = 1
     shapeL = 2
@@ -37,6 +37,16 @@ class Shape(Enum):
     shapeO = 5
     shapeS = 6
     shapeZ = 7
+class eActPurpose(IntEnum):
+    tetris              = 0
+    tetris_other        = 1
+    clear_alive         = 2
+    clear_waste         = 3
+    clear_remove_hole   = 4
+    clear_other         = 5
+    pile_up             = 6
+    pile_up_hole        = 7
+    pile_up_other       = 8
 
 ###################################################
 ###################################################
@@ -439,6 +449,10 @@ class Block_Controller(object):
         self.state = self.initial_state
         # テトリミノ0
         self.tetrominoes = 0
+        # step2()の前回値
+        self.tetris_reward_pre = 0
+        self.hole_num_pre = 0
+        self.action_purpose_count = np.zeros(len(eActPurpose), dtype = int)
 
         # 前のターンで Drop をスキップしていたか？ (-1: していない, それ以外: していた)
         # third_y, forth_direction, fifth_x
@@ -461,6 +475,7 @@ class Block_Controller(object):
         if self.reward_clipping:
             # 報酬リストとペナルティ(GAMEOVER 報酬)リストの絶対値の最大をとる
             self.norm_num =max(max(self.reward_list),abs(self.penalty))
+            self.norm_num /= 3      # 他報酬との兼ね合いで調整（penaltyも同様にするため、ここで実施）
             # 最大値で割った値を改めて報酬リストとする
             self.reward_list =[r/self.norm_num for r in self.reward_list]
             # ペナルティリストも同じようにする
@@ -503,15 +518,16 @@ class Block_Controller(object):
     # リセット時にスコア計算し episode memory に penalty 追加
     # 経験学習のために episode_memory を replay_memory 追加
     ####################################
-    def stack_replay_memory(self):
+    def stack_replay_memory(self, flb_force_reset):
         if self.mode=="train" or self.mode=="train_sample" or self.mode=="train_sample2":
-            self.score += self.score_list[5]
-
             #[next_state, reward, next2_state, done]
-            self.episode_memory[-1][1] += self.penalty
             self.episode_memory[-1][3] = True  #store False to done lists.
-            self.epoch_reward += self.penalty
-            #
+            if(False == flb_force_reset):   # 最後まで到達しなかった場合のみ
+                self.score += self.score_list[5]
+                self.episode_memory[-1][1] += self.penalty
+                self.epoch_reward += self.penalty
+            #endif
+
             if self.multi_step_learning:
                 self.episode_memory = self.MSL.arrange(self.episode_memory)
 
@@ -526,7 +542,7 @@ class Block_Controller(object):
     # Game の Reset の実施 (Game Over後)
     # nextMove["option"]["reset_callback_function_addr"] へ設定
     ####################################
-    def update(self):
+    def update(self, flb_force_reset):
 
         ##############################
         ## 学習の場合
@@ -534,7 +550,7 @@ class Block_Controller(object):
         if self.mode=="train" or self.mode=="train_sample" or self.mode=="train_sample2":
             # リセット時にスコア計算し episode memory に penalty 追加
             # replay_memory に episode memory 追加
-            self.stack_replay_memory()
+            self.stack_replay_memory(flb_force_reset)
 
             ##############################
             ## ログ表示
@@ -651,9 +667,8 @@ class Block_Controller(object):
 
                 ###################################
                 # 結果の出力
-                log = "Epoch: {} / {}, Score: {:>5}, block: {:>3}, Reward: {: .4f}, Cleared lines: {:>3}, col: {}/{}/{}/{} ".format(
+                log = "Epoch: {}, Score: {:>5}, block: {:>3}, Reward:{:> 7.2f}, lines: {:>3}, col: {}/{}/{}/{}, loss: {:>.3f} ".format(
                     self.epoch,
-                    self.num_epochs,
                     self.score,
                     self.tetrominoes,
                     self.epoch_reward,
@@ -661,16 +676,23 @@ class Block_Controller(object):
                     self.cleared_col[1],
                     self.cleared_col[2],
                     self.cleared_col[3],
-                    self.cleared_col[4]
+                    self.cleared_col[4],
+                    loss
                     )
 
-                log_epoch_reward_detail = "  epoch_reward_detail: "
+                log_epoch_reward_detail = "  Rewards:"
                 for i in range(EPOCH_REWARD_DETAIL_NUM):
                     log_epoch_reward_detail += " {}: {:.2f} /".format(i, self.epoch_reward_detail[i])
                 # end for
                 log += log_epoch_reward_detail
 
+                log_action_purpose_count = "  action_purpose: "
+                for i in range(len(self.action_purpose_count)):
+                    log_action_purpose_count += "{}/".format(self.action_purpose_count[i])
+                # end for
+
                 print(log)
+                print(log_action_purpose_count)
 
                 with open(self.log,"a") as f:
                     print(log, file=f)  # TODO: CSV化
@@ -691,9 +713,15 @@ class Block_Controller(object):
                 self.writer.add_scalar('Train/3 line', self.cleared_col[3], self.epoch - 1)
                 self.writer.add_scalar('Train/4 line', self.cleared_col[4], self.epoch - 1)
 
+                self.writer.add_scalar('Train/loss', loss, self.epoch - 1)
+
                 for i in range(EPOCH_REWARD_DETAIL_NUM):
                     self.writer.add_scalar("Train/reward_detail["+str(i)+"]", self.epoch_reward_detail[i], self.epoch - 1)
                 # end for
+
+                # for i in range(len(eActPurpose)):
+                #     self.writer.add_scalar("Train/action_purpose_count["+str(i)+"]", self.action_purpose_count[i], self.epoch - 1)
+                # # end for
 
             ###################################
             # EPOCH 数が規定数を超えたら
@@ -760,6 +788,10 @@ class Block_Controller(object):
         # 前のターンで Drop をスキップしていたか？ (-1: していない, それ以外: していた)
         # third_y, forth_direction, fifth_x
         self.skip_drop = [-1, -1, -1]
+        # step2()の前回値
+        self.tetris_reward_pre = 0
+        self.hole_num_pre = 0
+        self.action_purpose_count = np.zeros(len(eActPurpose), dtype = int)
 
     ####################################
     #削除されるLineを数える
@@ -872,6 +904,27 @@ class Block_Controller(object):
         return total_bumpiness, std_height, max_height, min_height, heights[0], max_diff, step_increase, req_num_Imino
 
     ####################################
+    ## max_heightだけ返す（get_bumpiness_and_height()に色々入れすぎているので、別関数化）
+    # reshape_board: 2次元画面ボード
+    ####################################
+    def get_max_height(self, reshape_board):
+        # ボード上で 0 でないもの(テトリミノのあるところ)を抽出
+        # (0,1,2,3,4,5,6,7) を ブロックあり True, なし False に変更
+        mask = reshape_board != 0
+        #pprint.pprint(mask, width = 61, compact = True)
+
+        # 列方向 何かブロックがあれば、そのindexを返す
+        # なければ画面ボード縦サイズを返す
+        # 上記を 画面ボードの列に対して実施したの配列(長さ width)を返す
+        invert_heights = np.where(mask.any(axis=0), np.argmax(mask, axis=0), self.height)
+        # 上からの距離なので反転 (配列)
+        heights = self.height - invert_heights
+        # 最も高いところをとる (返り値用)
+        max_height = np.max(heights)
+
+        return max_height
+
+    ####################################
     ## 穴の数, 穴の上積み上げ Penalty, 最も高い穴の位置を求める
     # reshape_board: 2次元画面ボード
     # min_height: 到達可能の最下層より1行下の穴の位置をチェック -1 で無効 hole_top_penalty 無効
@@ -914,6 +967,12 @@ class Block_Controller(object):
                 highest_holes[i] = cols_holes[0]
             else:
                 highest_holes[i] = -1
+        #endfor
+
+        # 穴の割合
+        mask = reshape_board != 0
+        sum = np.sum(np.sum(mask, axis=1))
+        rate_holes = num_holes / sum
 
         ## 最も高い穴を求める
         max_highest_hole = max(highest_holes)
@@ -940,7 +999,7 @@ class Block_Controller(object):
             #print(hole_top_penalty, hole_top_penalty*max_highest_hole)
             #print("==")
 
-        return num_holes, hole_top_penalty, max_highest_hole
+        return num_holes, hole_top_penalty, max_highest_hole, rate_holes
 
     ####################################
     # 現状状態の各種パラメータ取得 (MLP
@@ -949,7 +1008,7 @@ class Block_Controller(object):
         #削除された行の報酬
         lines_cleared, reshape_board = self.check_cleared_rows(reshape_board)
         # 穴の数
-        holes, _ , _ = self.get_holes(reshape_board, -1)
+        holes, _ , _ , _ = self.get_holes(reshape_board, -1)
         # でこぼこの数
         bumpiness, height, max_height, min_height, _ , _ , _ , _ = self.get_bumpiness_and_height(reshape_board)
 
@@ -962,7 +1021,7 @@ class Block_Controller(object):
         # 削除された行の報酬
         lines_cleared, reshape_board = self.check_cleared_rows(reshape_board)
         # 穴の数
-        holes, _ , _ = self.get_holes(reshape_board, -1)
+        holes, _ , _ , _ = self.get_holes(reshape_board, -1)
         # でこぼこの数
         bumpiness, height, max_row, min_height, _ , _ , _ , _ = self.get_bumpiness_and_height(reshape_board)
         # 最大高さ
@@ -1496,10 +1555,12 @@ class Block_Controller(object):
         bampiness, std_height, max_height, min_height, left_side_height, max_diff, step_increase, req_num_Imino = self.get_bumpiness_and_height(reshape_board)
         #max_height = self.get_max_height(reshape_board)
         ## 穴の数, 穴の上積み上げ Penalty, 最も高い穴の位置を求める
-        hole_num, hole_top_penalty, max_highest_hole = self.get_holes(reshape_board, min_height)
+        hole_num, hole_top_penalty, max_highest_hole, rate_holes = self.get_holes(reshape_board, min_height)
         ## 左端あけた形状の報酬計算
         tetris_reward, density = self.get_tetris_fill_reward(reshape_board, max_height)
         ## 消せるセルの確認
+        # NOTE: ここでライン消ししているので、これより上は「ブロック落下させたがライン消し」していない状態となるため、結果が変わるものもある
+        #       試しに上に持って行ったが、あまり結果変わらなかったのと、こっち前提でチューニングしているところもあるので、そのままにしておく
         lines_cleared, reshape_board = self.check_cleared_rows(reshape_board)
         # 4段消し可能 or 消した
         col_ready_tetris = self.get_col_ready_tetris(reshape_board)
@@ -1518,14 +1579,60 @@ class Block_Controller(object):
 
         # if (I_MINO_LENGTH == lines_cleared):    print("TETRIS!!")
 
+        # 行動評価
+        action_purpose = None
+        action_purpose_reward = 0
+        if(I_MINO_LENGTH == lines_cleared):
+            if((TARGET_TETRIS_COL - 1) == x0):
+                # 4段消し（狙いの場所）　行動〇　状況〇
+                action_purpose = eActPurpose.tetris
+                action_purpose_reward = 3
+            else:
+                # 4段消し（狙いの場所以外）　行動〇　状況△
+                action_purpose = eActPurpose.tetris_other
+                action_purpose_reward = 2
+            #endif
+        elif(0 < lines_cleared):
+            if(self.max_height_relax < max_height):
+                # 1～3段消し（延命）　行動△　状況△
+                action_purpose = eActPurpose.clear_alive
+                action_purpose_reward = 1
+            elif(self.tetris_reward_pre > tetris_reward):
+                # 1～3段消し（延命でもないのに狙いの場所を浪費）　行動×　状況〇
+                action_purpose = eActPurpose.clear_waste
+                action_purpose_reward = -3
+            elif(self.hole_num_pre > hole_num):
+                # 1～3段消し（穴の蓋取り）　行動△　状況×
+                action_purpose = eActPurpose.clear_remove_hole
+            else:
+                # その他（狙いの場所以外 かつ 穴の数が変化しない）　行動△　状況×
+                # TODO: バリエーションの深堀
+                action_purpose = eActPurpose.clear_other
+            #endif
+        else:
+            if(self.hole_num_pre >= hole_num):
+                # 積み上げ（穴の増加無し）　行動－　状況－
+                action_purpose = eActPurpose.pile_up
+            elif(self.hole_num_pre < hole_num):
+                # 穴の増加　　行動×　状況－
+                action_purpose = eActPurpose.pile_up_hole
+                action_purpose_reward = -2
+            else:
+                # その他
+                action_purpose = eActPurpose.pile_up_other
+        #endif
+
+        # print(action_purpose)
+        self.action_purpose_count[action_purpose] += 1
+
         epoch_reward_detail = np.zeros(EPOCH_REWARD_DETAIL_NUM)
         ## 報酬の計算
-        epoch_reward_detail[0] = self.reward_list[lines_cleared] * (1 + ((self.height - max(0,max_height)) / self.height) * self.height_line_reward) * 3
+        epoch_reward_detail[0] = self.reward_list[lines_cleared] * (1 + ((self.height - max(0,max_height)) / self.height) * self.height_line_reward)
         if((0 < lines_cleared) & (I_MINO_LENGTH > lines_cleared) & (max_height <= self.max_height_relax)):
             # まだ低いのに4つ消し以外を行なった場合の補正
             # （盤面整理のための消去の場合は、他の項目（穴の数など）でプラス補正がかかるはず）
-            epoch_reward_detail[0] *= 0.1
-            epoch_reward_detail[0] -= 0.05
+            epoch_reward_detail[0] *= 0.01
+            epoch_reward_detail[0] -= self.reward_list[4] * 0.1    # マイナス補正
         # endif
         #### 形状の罰報酬
         ## でこぼこ度罰
@@ -1561,7 +1668,7 @@ class Block_Controller(object):
         epoch_reward_detail[13] -= self.reward_weight[9] * std_height
         # 4段消し以外にIミノを使用（ペナルティ）
         #   Iミノでしか埋めれない溝に使用した場合は、[9]のペナルティ解消と相殺される想定
-        if( (Shape.shapeI.value == curr_shape_class.shape) & (I_MINO_LENGTH != lines_cleared) ):
+        if( (eShape.shapeI.value == curr_shape_class.shape) & (I_MINO_LENGTH != lines_cleared) ):
             Imino_penalty = 0.1
             if("y" == use_hold_function):
                 # HOLDから出したのに4段消しに使わなかった場合は重い
@@ -1569,6 +1676,10 @@ class Block_Controller(object):
             # end if
             epoch_reward_detail[14] -= self.reward_weight[10] * Imino_penalty
         # end if
+        # 穴の割合（ペナルティ）
+        epoch_reward_detail[15] -= self.reward_weight[11] * rate_holes
+        # 行動評価
+        epoch_reward_detail[16] = self.reward_weight[12] * action_purpose_reward
 
         reward = np.sum(epoch_reward_detail)
         self.epoch_reward += reward
@@ -1581,6 +1692,10 @@ class Block_Controller(object):
         self.cleared_col[lines_cleared] += 1
         # テトリミノ数カウント増やす
         self.tetrominoes += 1
+
+        # 前回値の更新
+        self.tetris_reward_pre = tetris_reward
+        self.hole_num_pre = hole_num
         return reward
 
     ####################################
@@ -1596,7 +1711,7 @@ class Block_Controller(object):
         # 報酬計算元の値取得
         bampiness, stdev_height, max_height, min_height, _ , _ , _ , _= self.get_bumpiness_and_height(reshape_board)
         #max_height = self.get_max_height(reshape_board)
-        hole_num, _ , _ = self.get_holes(reshape_board, min_height)
+        hole_num, _ , _ , _ = self.get_holes(reshape_board, min_height)
         lines_cleared, reshape_board = self.check_cleared_rows(reshape_board)
         #### 報酬の計算
         reward = self.reward_list[lines_cleared]
@@ -1666,7 +1781,7 @@ class Block_Controller(object):
         #print(reshape_backboard)
         #self.state = reshape_backboard
 
-        if( (None == hold_piece_id) | (Shape.shapeNone.value == hold_piece_id) ):
+        if( (None == hold_piece_id) | (eShape.shapeNone.value == hold_piece_id) ):
             # HOLD無しならとりあえずHOLDしておく（HOLD無しの場合の場合分けが面倒なので）
             nextMove["strategy"]["use_hold_function"] = "y"
             nextMove["strategy"]["direction"] = 0
@@ -1700,8 +1815,8 @@ class Block_Controller(object):
 
         flb_use_current = True
         flb_use_hold = False
-        if( (None != hold_piece_id) & (Shape.shapeNone.value != hold_piece_id) & (curr_piece_id != hold_piece_id)): # HOLD使用可能か
-            if(Shape.shapeI.value == hold_piece_id):
+        if( (None != hold_piece_id) & (eShape.shapeNone.value != hold_piece_id) & (curr_piece_id != hold_piece_id)): # HOLD使用可能か
+            if(eShape.shapeI.value == hold_piece_id):
                 if(True == flb_can_tetris):
                     # holdがIミノで4段消し可能な場合は、hold一択（4段消し狙い）
                     flb_use_current = False
@@ -1709,7 +1824,7 @@ class Block_Controller(object):
                 else:
                     flb_next_list_has_Imino = False     # NEXTに一つでもIミノがあるか
                     for nextShapes in GameStatus["block_info"]["nextShapeList"]:
-                        if(Shape.shapeI.value == GameStatus["block_info"]["nextShapeList"][nextShapes]["index"]):
+                        if(eShape.shapeI.value == GameStatus["block_info"]["nextShapeList"][nextShapes]["index"]):
                             flb_next_list_has_Imino = True
                             break
                         # end if
@@ -1725,7 +1840,7 @@ class Block_Controller(object):
                         flb_use_hold = False
                     # end if
                 # end if
-            elif( (Shape.shapeI.value == curr_piece_id) & (False == flb_can_tetris)):
+            elif( (eShape.shapeI.value == curr_piece_id) & (False == flb_can_tetris)):
                 # currentがIミノだが4段消し不可能な場合は、hold一択（IミノをHOLDさせる）
                 flb_use_current = False
                 flb_use_hold = True
@@ -2029,17 +2144,17 @@ class Block_Controller(object):
             if self.weight2_available:
                 #ボードを２次元化
                 reshape_board = self.get_reshape_backboard(curr_backboard)
-                ## 最も高い穴の位置を求める
-                _ , _ , max_highest_hole = self.get_holes(reshape_board, -1)
+                ## 最も高い位置を求める
+                max_height = self.get_max_height(reshape_board)
                 ## model2 切り替え条件
-                if max_highest_hole < self.predict_weight2_enable_index:
+                if max_height < self.predict_weight2_enable_index:
                     self.weight2_enable = True
                 ## model1 切り替え条件
-                if max_highest_hole > self.predict_weight2_disable_index:
+                if max_height > self.predict_weight2_disable_index:
                     self.weight2_enable = False
 
                 #debug
-                print (GameStatus["judge_info"]["block_index"], self.weight2_enable, max_highest_hole)
+                print (GameStatus["judge_info"]["block_index"], self.weight2_enable, max_height)
 
 
             ##############
@@ -2067,9 +2182,7 @@ class Block_Controller(object):
 
                 # 全予測の最大 q
                 max_index_list = max(index_list_to_q, key=index_list_to_q.get)
-                #print(max(index_list_to_q, key=index_list_to_q.get))
-                #print(max_index_list[0].item())
-                #print("============================")
+                # print("{} : {}".format(max_index_list, max(index_list_to_q.values())))
                 # 1手目の index 入手
                 index = max_index_list[0].item()
 
