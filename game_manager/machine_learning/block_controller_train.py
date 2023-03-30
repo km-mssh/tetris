@@ -1632,7 +1632,7 @@ class Block_Controller(object):
             # まだ低いのに4つ消し以外を行なった場合の補正
             # （盤面整理のための消去の場合は、他の項目（穴の数など）でプラス補正がかかるはず）
             epoch_reward_detail[0] *= 0.01
-            epoch_reward_detail[0] -= self.reward_list[4] * 0.1    # マイナス補正
+            epoch_reward_detail[0] -= self.reward_list[4] * 0.2    # マイナス補正
         # endif
         #### 形状の罰報酬
         ## でこぼこ度罰
